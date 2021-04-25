@@ -1,6 +1,7 @@
 name: Build
 
-on: 
+on:
+  workflow_dispatch:
   pull_request:
     branches:
       - 'master'
@@ -18,6 +19,7 @@ jobs:
       GIT_SHA: ${{ github.sha }}
       Configuration: Release
       SolutionFile: dotnet\DotNetStandardClasses.sln
+      AzureUrl: https://pkgs.dev.azure.com/genexuslabs/_packaging/dotnet-classes-nuget/nuget/v3/index.json
     
     runs-on: windows-latest
 
@@ -63,3 +65,71 @@ jobs:
 
     - name: Pack
       run: dotnet pack $Env:SolutionFile --no-restore --no-build --configuration $Env:Configuration /p:Version=$Env:NuGetPackageVersion
+      
+    - name: Azure Artifacts credential configuration
+      run: |
+        iex "& { $(irm https://aka.ms/install-artifacts-credprovider.ps1) } -AddNetfx"
+             
+        $endpointCredentialsArray = @()
+        
+        $endpointCredentials = @{}
+        $endpointCredentials["endpoint"] = "$Env:AzureUrl"
+        $endpointCredentials["username"] = "dummyValue"
+        $endpointCredentials["password"] = "${{ secrets.AZURE_PIPELINES_FEED_TOKEN }}"
+        $endpointCredentialsArray += $endpointCredentials
+        
+        $credentials = @{}
+        $credentials["endpointCredentials"] = $endpointCredentialsArray
+        $credentialsJSON = $credentials | ConvertTo-Json -Compress
+
+        echo "VSS_NUGET_EXTERNAL_FEED_ENDPOINTS=$credentialsJSON" >> $env:GITHUB_ENV
+    
+    - name: Publish packages
+      env:
+        NuGetPrereleasesRepository: ${{ secrets.NEXUS_NUGET_PRERELEASES }}
+        NuGetReleasesRepository: ${{ secrets.NEXUS_NUGET_RELEASES }}
+        GPRUrl: https://nuget.pkg.github.com/jechague/index.json
+      run: |
+        $IsPrerelease = [System.Convert]::ToBoolean($Env:IsPrerelease)
+        $NuGetRepository = @("$Env:NuGetReleasesRepository", "$Env:NuGetPrereleasesRepository")[$IsPrerelease]
+        
+        $totalPackages  = 0
+        $pushedToNexus  = 0
+        $pushedToGitHub = 0
+        $pushedToAzure  = 0
+        
+        Get-ChildItem .\dotnet\*.nupkg -Recurse | ForEach-Object {
+          $PushToNugetArgs  = @("nuget", "push", $_.FullName, "--source", $NuGetRepository)
+          $PushToGitHubArgs = @("nuget", "push", $_.FullName, "--source", $Env:GPRUrl, "--api-key", "${{ secrets.SECURE_TOKEN }}")
+          $PushToAzureArgs  = @("nuget", "push", $_.FullName, "--source", $Env:AzureUrl, "--api-key", "dummyValue")
+          
+          if ([System.Convert]::ToBoolean("true")) {
+            $PushToNugetArgs  += "--skip-duplicate"
+            $PushToGitHubArgs += "--skip-duplicate"
+            $PushToAzureArgs  += "--skip-duplicate"
+          }
+          
+          if (![string]::IsNullOrEmpty($NuGetRepository)) {
+            dotnet $PushToNugetArgs
+            $pushedToNexus += 1
+          } else {
+            Write-Output "Skipping publishing to internal Nexus repository because no URL was configured"
+          }
+          
+          if (!($IsPrerelease) -And "${{ github.repository_owner }}" -eq "GeneXusLabs") {
+            dotnet $PushToGitHubArgs
+            $pushedToGitHub += 1
+          }
+          
+          if ($IsPrerelease) {
+            dotnet $PushToAzureArgs
+            $pushedToAzure += 1
+          }
+          
+          $totalPackages += 1
+        }
+        
+        Write-Output "Number of packages found: $totalPackages"
+        Write-Output "Number of packages pushed to Nexus: $pushedToNexus"
+        Write-Output "Number of packages pushed to GitHub: $pushedToGitHub"
+        Write-Output "Number of packages pushed to Azure Artifacts: $pushedToAzure"
