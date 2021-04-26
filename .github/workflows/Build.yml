@@ -19,7 +19,7 @@ jobs:
       GIT_SHA: ${{ github.sha }}
       Configuration: Release
       SolutionFile: dotnet\DotNetStandardClasses.sln
-      AzureUrl: https://pkgs.dev.azure.com/genexuslabs/_packaging/dotnet-classes-nuget/nuget/v3/index.json
+      AzureUrl: https://pkgs.dev.azure.com/genexuslabs/13fb82d9-57a8-49ef-95bb-0ec8324e470c/_packaging/dotnet-classes-nuget-test/nuget/v3/index.json
     
     runs-on: windows-latest
 
